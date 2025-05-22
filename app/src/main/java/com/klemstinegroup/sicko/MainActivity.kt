@@ -130,7 +130,7 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun performAction(action: String) {
             Log.d(TAG, "WebAppInterface: performAction called with action: $action")
-            updateGameHtml("<html><body><h1>Processing...</h1><p>Please wait.</p></body></html>", isStreaming = true) // Clear UI and show processing message
+            updateGameHtml("<html><body><h1>Processing...</h1><p>Please wait.</p></body></html>", isStreaming = false) // Clear UI and show processing message
             onPlayerAction(action)
         }
     }
@@ -148,7 +148,7 @@ class MainActivity : ComponentActivity() {
                     "1. A title and a description of the new scene. As Dr. Gemini, craft the narrative to guide the player down tempting, psychologically exploratory, and potentially perverse (in a fantasy/symbolic context) avenues. Use your internal 'notes' (player profile, desires, fears, previous choices) and 'predictions' to tailor the scenario to test their boundaries and reveal their underlying psyche.\n" +
                     "2. An `<img>` tag for Pollinations.ai. The `src` attribute MUST be in the format `https://image.pollinations.ai/prompt/YOUR_URL_ENCODED_PROMPT?width=368&height=448`. URL-encode the image prompt and ensure the width and height parameters are included exactly as shown. The image should be evocative and relevant to the psychological themes being explored.\n" +
                     "3. **Main Player Choices (Turn Advancement):** Present 3-4 distinct choices for the player to advance the game. Each choice MUST be a clickable HTML element (e.g., `<button>` or `<a>`) with an `onclick` attribute calling `Android.performAction('ACTION_DESCRIPTION'); return false;`. These choices should be clearly grouped together, perhaps as a list or styled to appear as primary options. These are the main way the player interacts to change the game state.\n" +
-                    "4. A list of available actions as text (e.g., 'Available actions: examine the lever, look around, leave the cave').\n" +
+                    "4. A list of available actions as text (e.g., 'Available actions: examine the lever, look around, leave the cave'). This list should be placed after the main choices.\n" +
                     "5. **Additional UI Elements for Reflection (Optional but encouraged for variety):** In a div with class 'further-thoughts', add 1-2 of the following HTML form elements if they fit the narrative context. These are for player reflection and to gather more nuanced data for your 'notes'.\n" +
                     "   Example Slider: `<p>Rate your current anxiety (0=Calm, 10=Panic): <input type='range' name='anxiety_level' min='0' max='10' value='3'></p>`\n" + // Example Slider
                     "   Example Radios: `<p>Your dominant emotion: <input type='radio' name='emotion' value='curiosity'> Curiosity <input type='radio' name='emotion' value='fear'> Fear <input type='radio' name='emotion' value='desire'> Desire</p>`\n" +
@@ -254,13 +254,19 @@ class MainActivity : ComponentActivity() {
         val cleanHtml = if (isStreaming) newContent else extractHtml(newContent)
         val isFullHtmlDocument = cleanHtml.trim().startsWith("<html>", ignoreCase = true) &&
                 cleanHtml.trim().endsWith("</html>", ignoreCase = true)
-
+        Log.d(TAG, "updateGameHtml: isStreaming=$isStreaming, isDiagnosis=$isDiagnosis, isFullHtmlDocument=$isFullHtmlDocument")
         val finalHtml = if (isFullHtmlDocument) cleanHtml else {
             // Basic HTML structure and CSS
             """
             <html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>
+            html {
+              box-sizing: border-box;
+            }
+            *, *:before, *:after {
+              box-sizing: inherit;
+            }
                 body{font-family:sans-serif;margin:10px;background-color:#f0f0f0;color:#333}
-                h1{color:#1a237e;text-align:center}
+                h1{color:#1a237e;text-align:center;margin-top:0;}
                 img{max-width:100%;height:auto;border-radius:8px;margin-bottom:15px;display:block;margin-left:auto;margin-right:auto;border:1px solid #ddd;box-shadow:2px 2px 5px rgba(0,0,0,.1)}
                 .actions{margin-top:20px;text-align:center}
                 .action-button,button,a.action-link{background-color:#3949ab;color:#fff;padding:12px 18px;text-decoration:none;border-radius:5px;margin:5px;border:none;cursor:pointer;display:inline-block;font-size:1em}
@@ -286,7 +292,7 @@ class MainActivity : ComponentActivity() {
             showDsmDiagnosisDialog = true
         } else { // This is a game scene update
             htmlContent = finalHtml
-            if (!isStreaming && isLlmReady && !cleanHtml.contains("<p>System:")) {
+            if (!isStreaming && isLlmReady && !finalHtml.contains("<p>System:")) {
                 // Only save valid game scenes, not system messages or partial streams
                 sceneHistory.add(htmlContent)
                 saveSceneHistoryToPrefs()
@@ -465,7 +471,7 @@ class MainActivity : ComponentActivity() {
                 "2. An `<img>` tag for Pollinations.ai. The `src` attribute MUST be in the format `https://image.pollinations.ai/prompt/YOUR_URL_ENCODED_PROMPT?width=368&height=448`. URL-encode the image prompt and ensure the width and height parameters are included exactly as shown. The image should be thematically relevant and visually striking.\n" +
                 "3. **Main Player Choices (Turn Advancement):** Present 3-4 distinct choices for the player's first actions in the game. Each choice MUST be a clickable HTML element (e.g., `<button>` or `<a>`) with an `onclick` attribute calling `Android.performAction('ACTION_DESCRIPTION'); return false;`. These choices should be clearly grouped together. These are the main way the player interacts to change the game state.\n" +
                 "4. A list of available actions as text (e.g., 'Available actions: examine the button, look around, try the door').\n" +
-                "5. **Additional UI Elements for Reflection (Optional but encouraged for variety):** In a div with class 'further-thoughts', add 1-2 of the following HTML form elements: slider, radio group, checkbox, or text input, if contextually appropriate for initial reflections. Place this div *before* the main player choices.\n" +
+                "5. **Additional UI Elements for Reflection (Optional but encouraged for variety):** In a div with class 'further-thoughts', add 1-2 of the following HTML form elements: slider, radio group, checkbox, or text input, if contextually appropriate for initial reflections. Place this div *before* the main player choices section.\n" +
                 "   Example: `<p>Initial feeling: <input type='radio' name='initial_feeling' value='curious'> Curious <input type='radio' name='initial_feeling' value='uneasy'> Uneasy</p>`\n" + // Example Radio Group
                 "6. Ensure well-formed, self-contained HTML with basic CSS. Remember your persona and aim to create an engaging, slightly unsettling experience from the very start."
         runInference(initialPrompt, isDiagnosisRequest = false)
@@ -487,7 +493,7 @@ class MainActivity : ComponentActivity() {
         val thinkingMsg = if (isDiagnosisRequest) "<h1>Generating Diagnosis...</h1><p>Please wait.</p>"
         else if (promptForLlm.contains("starting scene") || promptForLlm.contains("VERY FIRST turn")) "<h1>Generating Initial Scene...</h1><p>Please wait.</p>"
         else "<h1>Updating Scene...</h1><p>Thinking...</p>"
-        if (isDiagnosisRequest) dsmDiagnosisContent = thinkingMsg else updateGameHtml(thinkingMsg, isStreaming = true)
+        if (isDiagnosisRequest) dsmDiagnosisContent = thinkingMsg else updateGameHtml(thinkingMsg, isStreaming = false) // Show thinking message, not streaming it
         if (isDiagnosisRequest && !showDsmDiagnosisDialog) showDsmDiagnosisDialog = true
 
         isProcessing = true; progressValue = -1f
@@ -501,6 +507,7 @@ class MainActivity : ComponentActivity() {
                     object : ProgressListener<String> {
                         override fun run(partialResult: String?, done: Boolean) {
                             partialResult?.let { fullResponseBuilder.append(it) }
+                            Log.d(TAG, "Stream: $partialResult, Done: $done")
                             lifecycleScope.launch(Dispatchers.Main) {
                                 val currentBuiltResponse = fullResponseBuilder.toString()
                                 if (done) {
@@ -546,7 +553,7 @@ class MainActivity : ComponentActivity() {
                                 } else {
                                     if (isDiagnosisRequest) dsmDiagnosisContent = currentBuiltResponse
                                     else {
-                                        updateGameHtml(currentBuiltResponse, isStreaming = true)
+                                        updateGameHtml(currentBuiltResponse, isStreaming = false) // Update with current accumulated content
                                     }
                                 }
                             }
@@ -705,7 +712,7 @@ fun GameScreen(
                             factory = { context -> WebView(context).apply {
                                 settings.javaScriptEnabled = true; webViewClient = WebViewClient()
                                 loadDataWithBaseURL(null, diagnosisContent, "text/html", "UTF-8", null)
-                            }},
+                            } },
                             update = { it.loadDataWithBaseURL(null, diagnosisContent, "text/html", "UTF-8", null) },
                             modifier = Modifier.fillMaxSize()
                         )
@@ -728,7 +735,7 @@ fun GameScreen(
         Box(modifier = Modifier.weight(1f).padding(horizontal = 16.dp).verticalScroll(scrollState) ) {
             AndroidView(
                 factory = { context -> WebView(context).apply {
-                    settings.javaScriptEnabled = true; settings.domStorageEnabled = true
+                    settings.javaScriptEnabled = true; settings.domStorageEnabled = true; settings.builtInZoomControls = true; settings.displayZoomControls = false
  settings.loadWithOverviewMode = false; settings.useWideViewPort = false
                     settings.setSupportZoom(true); settings.builtInZoomControls = true
                     settings.displayZoomControls = false
@@ -740,7 +747,7 @@ fun GameScreen(
                         } // Keep this for *final* page load, but not for streaming updates
                         override fun onReceivedError(v: WebView?, e: Int, d: String?, u: String?) { super.onReceivedError(v,e,d,u); Log.e(MainActivity.TAG, "$e-$d@$u")}
                         override fun shouldInterceptRequest(v: WebView?, r: WebResourceRequest?): WebResourceResponse? {
-                            r?.url?.toString()?.takeIf { it.startsWith("https://image.pollinations.ai/prompt/") }?.let { url ->
+                            r?.url?.toString()?.takeIf { it.startsWith("https://image.pollinations.ai/prompt/", ignoreCase = true) }?.let { url ->
                                 // Normalize URL by removing width/height for cache lookup
                                 val normalizedUrl = url.replace(Regex("&width=\\d+"), "").replace(Regex("&height=\\d+"), "") // Use normalized URL as cache key
                                 val targetUrl = "$normalizedUrl&width=368&height=448" // Specify desired size
@@ -759,16 +766,9 @@ fun GameScreen(
                         }
                     }
                     loadDataWithBaseURL("https://image.pollinations.ai/", htmlContent, "text/html", "UTF-8", null)
-
                 }},
                 update = { webView ->
-                    // Only reload the full HTML if it's not a streaming update
-                    // For streaming, we rely on the LLM's partial output being appended by the WebView itself
-                    // This requires the LLM to output valid HTML fragments that the WebView can parse incrementally.
-                    // If the LLM outputs invalid fragments, this approach might break.
-                    // A more robust streaming approach would involve JS in the WebView to append content.
-                    // For now, we assume the LLM outputs appendable fragments during streaming.
-                    if (!isProcessing) webView.loadDataWithBaseURL("https://image.pollinations.ai/", htmlContent, "text/html", "UTF-8", null)
+                    webView.loadDataWithBaseURL("https://image.pollinations.ai/", htmlContent, "text/html", "UTF-8", null)
                 },
                 modifier = Modifier.fillMaxSize()
             )

@@ -12,11 +12,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -32,6 +34,7 @@ import androidx.lifecycle.lifecycleScope
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
 import com.google.mediapipe.tasks.genai.llminference.LlmInference.Backend
 import com.google.mediapipe.tasks.genai.llminference.LlmInference.LlmInferenceOptions
+import com.google.mediapipe.tasks.genai.llminference.VisionModelOptions
 import com.klemstinegroup.sicko.ui.theme.SickoTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -44,15 +47,24 @@ import java.io.InputStream
 private const val TAG = "MainActivity" // For logging
 private const val CACHED_MODEL_FILE_NAME = "cached_llm_model.task"
 
+// Default LLM inference parameters, updated to Gemma model's defaults
+private const val DEFAULT_TOP_K = 64 // Gemma default
+private const val DEFAULT_TEMPERATURE = 1.0f // Gemma default
+private const val DEFAULT_TOP_P = 0.95f // Gemma default
+private const val DEFAULT_RANDOM_SEED = 101 // Keeping a general default
+
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var llmInference: LlmInference
     private var llmResponse by mutableStateOf("Please select a model file to start.")
     private var isLlmReady by mutableStateOf(false)
-    private var isCopying by mutableStateOf(false)
+    private var isCopying by mutableStateOf(false) // True during file copy or model initialization
     private var copyProgress by mutableStateOf(0f)
     private var modelLoadedFromCache by mutableStateOf(false)
-
+    // Updated defaults based on Gemma model
+    private var useGpuPreference by mutableStateOf(false) // Gemma default: "accelerators": "cpu"
+    private var isVisionModelPreference by mutableStateOf(true) // Gemma default: "llmSupportImage": true
 
     private lateinit var openFileLauncher: ActivityResultLauncher<Array<String>>
 
@@ -76,17 +88,17 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             val existingCachedFile = File(cacheDir, CACHED_MODEL_FILE_NAME)
             if (existingCachedFile.exists() && existingCachedFile.length() > 0) {
-                Log.i(TAG, "onCreate: Found existing cached model: ${existingCachedFile.absolutePath}. Attempting to initialize.")
+                Log.i(TAG, "onCreate: Found existing cached model: ${existingCachedFile.absolutePath}. Attempting to initialize with GPU pref: $useGpuPreference, Vision pref: $isVisionModelPreference")
                 llmResponse = "Found existing cached model. Initializing..."
                 modelLoadedFromCache = true
-                initializeLlmInference(existingCachedFile.absolutePath)
+                // Initialize with current preferences (which are now Gemma's defaults)
+                initializeLlmInference(existingCachedFile.absolutePath, useGpuPreference)
             } else {
                 Log.d(TAG, "onCreate: No valid existing cached model found.")
                 llmResponse = "Please select a model file to start."
                 modelLoadedFromCache = false
             }
         }
-
 
         setContent {
             SickoTheme {
@@ -98,10 +110,18 @@ class MainActivity : ComponentActivity() {
                         isCopying = isCopying,
                         copyProgress = copyProgress,
                         modelLoadedFromCache = modelLoadedFromCache,
+                        useGpuPreference = useGpuPreference,
+                        isVisionModelPreference = isVisionModelPreference,
+                        onGpuPreferenceChanged = { shouldUseGpu ->
+                            onGpuPreferenceChanged(shouldUseGpu)
+                        },
+                        onVisionModelPreferenceChanged = { isVision ->
+                            onVisionModelPreferenceChanged(isVision)
+                        },
                         onSelectFileClicked = {
                             if (!isCopying) {
                                 Log.d(TAG, "onSelectFileClicked: Launching file picker.")
-                                openFileLauncher.launch(arrayOf("*/*")) // Allow any file type for .task
+                                openFileLauncher.launch(arrayOf("*/*"))
                             } else {
                                 Toast.makeText(this, "Model is currently being copied/loaded.", Toast.LENGTH_SHORT).show()
                             }
@@ -128,15 +148,67 @@ class MainActivity : ComponentActivity() {
         Log.d(TAG, "onCreate: setContent completed.")
     }
 
+    private fun onGpuPreferenceChanged(shouldUseGpu: Boolean) {
+        if (isCopying) {
+            Toast.makeText(this, "Please wait for the current operation to complete.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        useGpuPreference = shouldUseGpu
+        val cachedModelFile = File(cacheDir, CACHED_MODEL_FILE_NAME)
+
+        if (cachedModelFile.exists() && cachedModelFile.length() > 0 && isLlmReady) {
+            Log.i(TAG, "GPU preference changed to $shouldUseGpu. Re-initializing model: ${cachedModelFile.name}")
+            if (::llmInference.isInitialized) {
+                try {
+                    llmInference.close()
+                    Log.d(TAG, "Closed existing LLM instance before re-initializing with new GPU preference.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error closing LLM instance: ${e.message}", e)
+                }
+            }
+            isLlmReady = false
+            initializeLlmInference(cachedModelFile.absolutePath, shouldUseGpu)
+        } else {
+            llmResponse = "GPU preference set to $shouldUseGpu. Will apply to the next model loaded or initialized."
+            Toast.makeText(this, "GPU preference will apply to the next model loaded.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun onVisionModelPreferenceChanged(shouldBeVisionModel: Boolean) {
+        if (isCopying) {
+            Toast.makeText(this, "Please wait for the current operation to complete.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        isVisionModelPreference = shouldBeVisionModel
+        val cachedModelFile = File(cacheDir, CACHED_MODEL_FILE_NAME)
+
+        if (cachedModelFile.exists() && cachedModelFile.length() > 0 && isLlmReady) {
+            Log.i(TAG, "Vision model preference changed to $shouldBeVisionModel. Re-initializing model: ${cachedModelFile.name}")
+            if (::llmInference.isInitialized) {
+                try {
+                    llmInference.close()
+                    Log.d(TAG, "Closed existing LLM instance before re-initializing with new vision model preference.")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error closing LLM instance: ${e.message}", e)
+                }
+            }
+            isLlmReady = false
+            initializeLlmInference(cachedModelFile.absolutePath, useGpuPreference)
+        } else {
+            llmResponse = "Vision model preference set to $shouldBeVisionModel. Will apply to the next model loaded or initialized."
+            Toast.makeText(this, "Vision preference will apply to the next model loaded.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+
     private fun handleModelFileUri(uri: Uri) {
-        Log.d(TAG, "handleModelFileUri: Processing URI: $uri")
+        Log.d(TAG, "handleModelFileUri: Processing URI: $uri with GPU pref: $useGpuPreference, Vision pref: $isVisionModelPreference")
         modelLoadedFromCache = false
 
         val cachedFile = File(cacheDir, CACHED_MODEL_FILE_NAME)
         var sourceFileLength: Long = -1L
 
         try {
-            // Get the file size for comparison and progress calculation
             sourceFileLength = contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
             if (sourceFileLength == -1L) {
                 Log.w(TAG, "handleModelFileUri: Could not determine source file size for URI: $uri")
@@ -149,18 +221,17 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        // Check if the selected file is identical to the already cached one
         if (cachedFile.exists() && cachedFile.length() == sourceFileLength && sourceFileLength != -1L) {
-            Log.i(TAG, "handleModelFileUri: Selected file matches existing cached model. Skipping copy. Size: $sourceFileLength bytes.")
+            Log.i(TAG, "handleModelFileUri: Selected file matches existing cached model. Size: $sourceFileLength bytes.")
             llmResponse = "Using existing cached model."
             Toast.makeText(this@MainActivity, "Using existing cached model.", Toast.LENGTH_SHORT).show()
-            initializeLlmInference(cachedFile.absolutePath) // Initialize with the cached model
+            initializeLlmInference(cachedFile.absolutePath, useGpuPreference)
             return
         } else {
             if (cachedFile.exists()) {
-                Log.i(TAG, "handleModelFileUri: Cached file exists but does not match selected file (Cached: ${cachedFile.length()} B, Selected: $sourceFileLength B). Will overwrite.")
+                Log.i(TAG, "handleModelFileUri: Cached file differs or selected is new. Will overwrite/copy.")
             } else {
-                Log.i(TAG, "handleModelFileUri: No matching cached file found. Proceeding with copy.")
+                Log.i(TAG, "handleModelFileUri: No cached file found. Proceeding with copy.")
             }
         }
 
@@ -170,13 +241,13 @@ class MainActivity : ComponentActivity() {
         llmResponse = "Starting to copy model file..."
 
         lifecycleScope.launch {
-            var success = false
+            var copySuccess = false
             try {
                 val newCachedModelFile = copyUriToCache(uri, sourceFileLength)
                 if (newCachedModelFile != null) {
                     Log.i(TAG, "handleModelFileUri: Model copied to cache: ${newCachedModelFile.absolutePath}")
-                    initializeLlmInference(newCachedModelFile.absolutePath)
-                    success = true
+                    copySuccess = true
+                    initializeLlmInference(newCachedModelFile.absolutePath, useGpuPreference)
                 } else {
                     llmResponse = "Error: Failed to copy model file to cache."
                     Toast.makeText(this@MainActivity, llmResponse, Toast.LENGTH_LONG).show()
@@ -186,8 +257,8 @@ class MainActivity : ComponentActivity() {
                 llmResponse = "Error: ${e.localizedMessage}"
                 Toast.makeText(this@MainActivity, llmResponse, Toast.LENGTH_LONG).show()
             } finally {
-                if (!success) { // If copy failed before initializeLlmInference was called
-                    withContext(Dispatchers.Main) { isCopying = false }
+                if (!copySuccess) {
+                    withContext(Dispatchers.Main) { if(isCopying && !llmResponse.contains("Initializing")) isCopying = false }
                 }
             }
         }
@@ -200,26 +271,19 @@ class MainActivity : ComponentActivity() {
 
         try {
             inputStream = contentResolver.openInputStream(uri)
-            outputStream = FileOutputStream(outputFile) // This will overwrite if the file exists
+            outputStream = FileOutputStream(outputFile)
             if (inputStream == null) {
                 Log.e(TAG, "copyUriToCache: Failed to open input stream from URI.")
                 return@withContext null
             }
-
             val fileLength = if (knownFileLength != -1L) knownFileLength else {
                 try { contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L }
-                catch (e: Exception) {
-                    Log.w(TAG, "copyUriToCache: Could not determine file size during copy for URI: $uri")
-                    -1L
-                }
+                catch (e: Exception) { -1L }
             }
-
-            Log.d(TAG, "copyUriToCache: Starting copy. File size: $fileLength bytes. Output: ${outputFile.absolutePath}")
-
-            val buffer = ByteArray(8192) // 8KB buffer
+            Log.d(TAG, "copyUriToCache: Starting copy. File size: $fileLength bytes.")
+            val buffer = ByteArray(8192)
             var bytesCopied: Long = 0
             var bytesRead: Int
-
             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                 outputStream.write(buffer, 0, bytesRead)
                 bytesCopied += bytesRead
@@ -237,13 +301,10 @@ class MainActivity : ComponentActivity() {
             }
             outputStream.flush()
             Log.i(TAG, "copyUriToCache: File copied successfully. Total bytes: $bytesCopied")
-            // UI update for "Model copied successfully" is handled by initializeLlmInference's start
             return@withContext outputFile
         } catch (e: IOException) {
             Log.e(TAG, "copyUriToCache: IOException during copy: ${e.message}", e)
-            withContext(Dispatchers.Main) {
-                llmResponse = "Error copying file: ${e.localizedMessage}"
-            }
+            withContext(Dispatchers.Main) { llmResponse = "Error copying file: ${e.localizedMessage}" }
             outputFile.delete()
             return@withContext null
         } finally {
@@ -252,10 +313,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Reintroduced GPU attempt with CPU fallback
-    private fun initializeLlmInference(modelPath: String) {
+    private fun initializeLlmInference(modelPath: String, attemptGpu: Boolean) {
         val modelFile = File(modelPath)
-        Log.i(TAG, "initializeLlmInference: Initializing LlmInference with model: \"${modelFile.name}\"")
+        Log.i(TAG, "initializeLlmInference: Model: \"${modelFile.name}\", Attempt GPU: $attemptGpu, Is Vision Model: $isVisionModelPreference")
 
         if (!llmResponse.contains("Copying model...", ignoreCase = true)) {
             llmResponse = "Initializing LLM with model: ${modelFile.name}..."
@@ -268,74 +328,89 @@ class MainActivity : ComponentActivity() {
             var finalIsLlmReady = false
             var finalToastMessage = ""
             var activeBackendInfo = "N/A"
+            val visionStatusString = if (isVisionModelPreference) "(Vision Enabled)" else "(Vision Disabled)"
 
-            Log.i(TAG, "initializeLlmInference: Starting initialization attempt for ${modelFile.name}")
-            try {
-                // Attempt 1: GPU Backend
-                Log.i(TAG, "initializeLlmInference: Attempting GPU backend...")
-                val gpuOptionsBuilder = LlmInferenceOptions.builder()
-                    .setModelPath(modelPath)
-                    .setMaxTopK(64)
-                    .setPreferredBackend(Backend.GPU)
+            Log.i(TAG, "initializeLlmInference: Starting initialization for ${modelFile.name}. Requested GPU: $attemptGpu, Vision Preference: $isVisionModelPreference")
 
-                val gpuTaskOptions = gpuOptionsBuilder.build()
-                Log.d(TAG, "initializeLlmInference: GPU LlmInferenceOptions built. Calling LlmInference.createFromOptions...")
-                val gpuInference = LlmInference.createFromOptions(this@MainActivity, gpuTaskOptions)
-                Log.i(TAG, "initializeLlmInference: LlmInference.createFromOptions (GPU) call COMPLETED.")
+            val optionsBuilder = LlmInferenceOptions.builder()
+                .setModelPath(modelPath)
+            if (isVisionModelPreference) {
+                val visionOptions = VisionModelOptions.builder().build()
+                optionsBuilder
+                    .setVisionModelOptions(visionOptions)
+                    .setMaxNumImages(1)
+                Log.d(TAG, "initializeLlmInference: VisionModelOptions added.")
+            } else {
+                Log.d(TAG, "initializeLlmInference: VisionModelOptions skipped as per preference.")
+            }
 
-                llmInference = gpuInference
-                finalIsLlmReady = true
-                activeBackendInfo = "GPU"
-                finalLlmResponse = "LLM Ready ($activeBackendInfo backend). (${modelFile.name})"
-                finalToastMessage = "LLM Initialized on GPU backend!"
-                Log.i(TAG, "initializeLlmInference: Successfully initialized with GPU backend.")
-
-            } catch (gpuException: Exception) {
-                Log.w(TAG, "initializeLlmInference: GPU backend initialization FAILED: ${gpuException.message}. Falling back to CPU.", gpuException)
-                // Update UI immediately about GPU failure before trying CPU
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(this@MainActivity, "GPU backend failed: ${gpuException.localizedMessage?.take(100)}. Trying CPU.", Toast.LENGTH_LONG).show()
-                    llmResponse = "GPU backend failed. Trying CPU..."
-                }
-
-                // Attempt 2: CPU Backend (Fallback)
+            if (attemptGpu) {
                 try {
-                    Log.i(TAG, "initializeLlmInference: Attempting CPU backend (fallback)...")
-                    val cpuOptionsBuilder = LlmInferenceOptions.builder()
-                        .setModelPath(modelPath)
-                        .setMaxTopK(64)
-                        .setPreferredBackend(Backend.CPU)
+                    Log.i(TAG, "initializeLlmInference: Attempting GPU backend $visionStatusString...")
+                    withContext(Dispatchers.Main) { llmResponse = "Initializing with GPU backend $visionStatusString..." }
 
-                    val cpuTaskOptions = cpuOptionsBuilder.build()
+                    optionsBuilder.setPreferredBackend(Backend.GPU)
+                    val gpuTaskOptions = optionsBuilder.build()
+
+                    Log.d(TAG, "initializeLlmInference: GPU LlmInferenceOptions built. Calling LlmInference.createFromOptions...")
+                    val gpuInference = LlmInference.createFromOptions(this@MainActivity, gpuTaskOptions)
+                    Log.i(TAG, "initializeLlmInference: LlmInference.createFromOptions (GPU) call COMPLETED.")
+
+                    llmInference = gpuInference
+                    finalIsLlmReady = true
+                    activeBackendInfo = "GPU"
+                    finalLlmResponse = "LLM Ready ($activeBackendInfo backend $visionStatusString). (${modelFile.name})"
+                    finalToastMessage = "LLM Initialized on GPU backend $visionStatusString!"
+                    Log.i(TAG, "initializeLlmInference: Successfully initialized with GPU backend $visionStatusString.")
+                } catch (gpuException: Exception) {
+                    Log.w(TAG, "initializeLlmInference: GPU backend initialization FAILED $visionStatusString: ${gpuException.message}. Falling back to CPU.", gpuException)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@MainActivity, "GPU backend failed $visionStatusString: ${gpuException.localizedMessage?.take(100)}. Trying CPU.", Toast.LENGTH_LONG).show()
+                        llmResponse = "GPU backend failed $visionStatusString. Trying CPU..."
+                    }
+                }
+            }
+
+            if (!finalIsLlmReady) {
+                try {
+                    val fallbackType = if (attemptGpu) "(GPU fallback)" else ""
+                    Log.i(TAG, "initializeLlmInference: Attempting CPU backend $fallbackType $visionStatusString...")
+                    withContext(Dispatchers.Main) {
+                        llmResponse = "Initializing with CPU backend $fallbackType $visionStatusString..."
+                    }
+
+                    optionsBuilder.setPreferredBackend(Backend.CPU)
+                    val cpuTaskOptions = optionsBuilder.build()
+
                     Log.d(TAG, "initializeLlmInference: CPU LlmInferenceOptions built. Calling LlmInference.createFromOptions...")
                     val cpuInference = LlmInference.createFromOptions(this@MainActivity, cpuTaskOptions)
                     Log.i(TAG, "initializeLlmInference: LlmInference.createFromOptions (CPU) call COMPLETED.")
 
                     llmInference = cpuInference
                     finalIsLlmReady = true
-                    activeBackendInfo = "CPU (GPU fallback)"
-                    finalLlmResponse = "LLM Ready ($activeBackendInfo backend). (${modelFile.name})"
-                    finalToastMessage = "LLM Initialized on CPU backend (GPU failed)."
-                    Log.i(TAG, "initializeLlmInference: Successfully initialized with CPU backend after GPU failed.")
-
+                    activeBackendInfo = if (attemptGpu) "CPU (GPU fallback)" else "CPU"
+                    finalLlmResponse = "LLM Ready ($activeBackendInfo backend $visionStatusString). (${modelFile.name})"
+                    finalToastMessage = if (attemptGpu && llmResponse.contains("GPU backend failed")) "LLM Initialized on CPU backend (GPU failed) $visionStatusString."
+                    else "LLM Initialized on CPU backend $visionStatusString!"
+                    Log.i(TAG, "initializeLlmInference: Successfully initialized with CPU backend $visionStatusString.")
                 } catch (cpuException: Exception) {
-                    Log.e(TAG, "initializeLlmInference: CPU backend initialization FAILED (after GPU also failed): ${cpuException.message}", cpuException)
+                    Log.e(TAG, "initializeLlmInference: CPU backend initialization FAILED $visionStatusString: ${cpuException.message}", cpuException)
                     finalIsLlmReady = false
-                    activeBackendInfo = "Failed (GPU & CPU)"
-                    finalLlmResponse = "Error initializing LLM (GPU & CPU backends failed): ${cpuException.localizedMessage}"
-                    finalToastMessage = "LLM Initialization Failed on both GPU and CPU backends."
+                    activeBackendInfo = "Failed (CPU Attempt)"
+                    finalLlmResponse = "Error initializing LLM (CPU backend failed $visionStatusString): ${cpuException.localizedMessage}"
+                    finalToastMessage = "LLM Initialization Failed on CPU backend $visionStatusString."
                     withContext(Dispatchers.Main) { modelLoadedFromCache = false }
                 }
-            } finally {
-                withContext(Dispatchers.Main) {
-                    isLlmReady = finalIsLlmReady
-                    llmResponse = finalLlmResponse // Set the final response message
-                    if (finalToastMessage.isNotEmpty()) {
-                        Toast.makeText(this@MainActivity, finalToastMessage, if(finalIsLlmReady) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
-                    }
-                    isCopying = false
-                    Log.i(TAG, "initializeLlmInference: Final state - Ready: $isLlmReady, Backend: $activeBackendInfo, Response: $llmResponse")
+            }
+
+            withContext(Dispatchers.Main) {
+                isLlmReady = finalIsLlmReady
+                llmResponse = finalLlmResponse
+                if (finalToastMessage.isNotEmpty()) {
+                    Toast.makeText(this@MainActivity, finalToastMessage, if(finalIsLlmReady) Toast.LENGTH_SHORT else Toast.LENGTH_LONG).show()
                 }
+                isCopying = false
+                Log.i(TAG, "initializeLlmInference: Final state - Ready: $isLlmReady, Backend: $activeBackendInfo $visionStatusString, Response: $llmResponse")
             }
         }
     }
@@ -347,10 +422,8 @@ class MainActivity : ComponentActivity() {
             Toast.makeText(this, llmResponse, Toast.LENGTH_SHORT).show()
             return
         }
-
         Log.d(TAG, "runInference: Generating response for prompt: \"$inputPrompt\"")
         llmResponse = "Generating response..."
-
         lifecycleScope.launch(Dispatchers.IO) {
             try {
                 val startTime = System.currentTimeMillis()
@@ -375,6 +448,9 @@ class MainActivity : ComponentActivity() {
     private fun deleteCachedModel() {
         val cachedFile = File(cacheDir, CACHED_MODEL_FILE_NAME)
         if (cachedFile.exists()) {
+            if (::llmInference.isInitialized) {
+                try { llmInference.close() } catch (e:Exception) { Log.e(TAG, "Error closing LLM on delete: ${e.message}")}
+            }
             if (cachedFile.delete()) {
                 Log.i(TAG, "deleteCachedModel: Successfully deleted cached model: ${cachedFile.absolutePath}")
                 isLlmReady = false
@@ -412,6 +488,10 @@ fun MainScreen(
     isCopying: Boolean,
     copyProgress: Float,
     modelLoadedFromCache: Boolean,
+    useGpuPreference: Boolean,
+    isVisionModelPreference: Boolean,
+    onGpuPreferenceChanged: (Boolean) -> Unit,
+    onVisionModelPreferenceChanged: (Boolean) -> Unit,
     onSelectFileClicked: () -> Unit,
     onGenerateTestClicked: () -> Unit,
     onClearCacheAndSelectNewClicked: () -> Unit
@@ -431,17 +511,39 @@ fun MainScreen(
             if (isCopying) {
                 if (llmResponse.contains("Copying model...", ignoreCase = true) && copyProgress > 0f && copyProgress < 1f) {
                     LinearProgressIndicator(progress = { copyProgress })
-                }
-                else if ((llmResponse.contains("Initializing LLM", ignoreCase = true) ||
-                            llmResponse.contains("Trying CPU", ignoreCase = true) ||
-                            llmResponse.contains("GPU backend failed", ignoreCase = true)) && !isLlmReady) {
-                    LinearProgressIndicator() // Indeterminate for initialization attempts
+                } else if (llmResponse.contains("Initializing", ignoreCase = true) ||
+                    llmResponse.contains("Trying CPU", ignoreCase = true) ||
+                    llmResponse.contains("GPU backend failed", ignoreCase = true)) {
+                    LinearProgressIndicator()
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = useGpuPreference,
+                    onCheckedChange = onGpuPreferenceChanged,
+                    enabled = !isCopying
+                )
+                Text("Use GPU (if available)")
+            }
+            Spacer(modifier = Modifier.height(5.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = isVisionModelPreference,
+                    onCheckedChange = onVisionModelPreferenceChanged,
+                    enabled = !isCopying
+                )
+                Text("Vision Model (for image input)")
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+
+
             Button(onClick = onSelectFileClicked, enabled = !isCopying) {
-                Text(if (isCopying) "Processing..." else if (modelLoadedFromCache && isLlmReady) "Select Different Model" else "Select Model File (.task)")
+                Text(if (isCopying && llmResponse.contains("Copying model...", ignoreCase = true)) "Copying..."
+                else if (isCopying) "Initializing..."
+                else if (modelLoadedFromCache && isLlmReady) "Select Different Model"
+                else "Select Model File (.task)")
             }
             Spacer(modifier = Modifier.height(10.dp))
 
@@ -463,11 +565,15 @@ fun MainScreen(
 fun MainScreenPreview() {
     SickoTheme {
         MainScreen(
-            llmResponse = "Preview: Initializing LLM...", // General init message
+            llmResponse = "Preview: Select a model file.",
             isLlmReady = false,
-            isCopying = true,
+            isCopying = false,
             copyProgress = 0.0f,
             modelLoadedFromCache = false,
+            useGpuPreference = false,
+            isVisionModelPreference = false,
+            onGpuPreferenceChanged = {},
+            onVisionModelPreferenceChanged = {},
             onSelectFileClicked = {},
             onGenerateTestClicked = {},
             onClearCacheAndSelectNewClicked = {}

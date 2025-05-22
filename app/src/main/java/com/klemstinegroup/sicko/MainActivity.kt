@@ -146,15 +146,14 @@ class MainActivity : ComponentActivity() {
                     "**TASK 2: GENERATE THE NEXT GAME SCENE**\n" +
                     "After the summary, generate **only the HTML code** for the next game scene. The HTML should include:\n" +
                     "1. A title and a description of the new scene. As Dr. Gemini, craft the narrative to guide the player down tempting, psychologically exploratory, and potentially perverse (in a fantasy/symbolic context) avenues. Use your internal 'notes' (player profile, desires, fears, previous choices) and 'predictions' to tailor the scenario to test their boundaries and reveal their underlying psyche.\n" +
-                    "2. An `<img>` tag for Pollinations.ai. The `src` attribute MUST be in the format `https://image.pollinations.ai/prompt/YOUR_URL_ENCODED_PROMPT?width=368&height=448`. URL-encode the image prompt and ensure the width and height parameters are included exactly as shown. The image should be evocative and relevant to the psychological themes being explored.\n" +
+                    "2. An `<img>` tag for Pollinations.ai. The `src` attribute MUST be in the format `https://image.pollinations.ai/prompt/YOUR_URL_ENCODED_PROMPT?width=368&height=448`. URL-encode the image prompt and ensure the width and height parameters are included exactly as shown. The image should be evocative and relevant to the psychological themes being explored. **Place this image tag immediately after the title and description.**\n" +
                     "3. **Main Player Choices (Turn Advancement):** Present 3-4 distinct choices for the player to advance the game. Each choice MUST be a clickable HTML element (e.g., `<button>` or `<a>`) with an `onclick` attribute calling `Android.performAction('ACTION_DESCRIPTION'); return false;`. These choices should be clearly grouped together, perhaps as a list or styled to appear as primary options. These are the main way the player interacts to change the game state.\n" +
-                    "4. A list of available actions as text (e.g., 'Available actions: examine the lever, look around, leave the cave'). This list should be placed after the main choices.\n" +
-                    "5. **Additional UI Elements for Reflection (Optional but encouraged for variety):** In a div with class 'further-thoughts', add 1-2 of the following HTML form elements if they fit the narrative context. These are for player reflection and to gather more nuanced data for your 'notes'.\n" +
+                    "4. **Additional UI Elements for Reflection (Optional but encouraged for variety):** In a div with class 'further-thoughts', add 1-2 of the following HTML form elements if they fit the narrative context. These are for player reflection and to gather more nuanced data for your 'notes'.\n" +
                     "   Example Slider: `<p>Rate your current anxiety (0=Calm, 10=Panic): <input type='range' name='anxiety_level' min='0' max='10' value='3'></p>`\n" + // Example Slider
                     "   Example Radios: `<p>Your dominant emotion: <input type='radio' name='emotion' value='curiosity'> Curiosity <input type='radio' name='emotion' value='fear'> Fear <input type='radio' name='emotion' value='desire'> Desire</p>`\n" +
                     "   Example Checkbox: `<p><input type='checkbox' name='explore_further_check'> Do you wish to delve deeper into this sensation?</p>`\n" +
                     "   Example Text: `<p>A word that describes this place: <input type='text' name='place_keyword' placeholder='e.g., unsettling, alluring'></p>`\n" +
-                    "6. Ensure the HTML is well-formed, self-contained, and includes basic CSS. Do not include any explanations or text outside the HTML tags, except for the initial ACTION_SUMMARY line."
+                    "5. Ensure the HTML is well-formed, self-contained, and includes basic CSS. Do not include any explanations or text outside the HTML tags, except for the initial ACTION_SUMMARY line."
             runInference(prompt, isDiagnosisRequest = false)
         } else {
             Toast.makeText(this, "LLM not ready or busy.", Toast.LENGTH_LONG).show()
@@ -212,7 +211,7 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.padding(innerPadding), htmlContent = htmlContent,
                         isLlmReady = isLlmReady, isProcessing = isProcessing, progressValue = progressValue,
                         onPlayerAction = this::onPlayerAction, imageCacheMap = imageCacheMap, appCacheDir = cacheDir,
-                        onResetGameClicked = { resetGame() }, onRequestDiagnosisClicked = { requestDsmDiagnosis() },
+                        onResetGameClicked = { showResetConfirmationDialog() }, onRequestDiagnosisClicked = { requestDsmDiagnosis() },
                         showDiagnosisDialog = showDsmDiagnosisDialog, diagnosisContent = dsmDiagnosisContent,
                         onDismissDiagnosisDialog = { showDsmDiagnosisDialog = false }
                     )
@@ -226,7 +225,7 @@ class MainActivity : ComponentActivity() {
         val htmlBlockRegex = Regex("```html\\s*([\\s\\S]*?)\\s*```", RegexOption.MULTILINE)
         val match = htmlBlockRegex.find(trimmedOutput)
         if (match != null && match.groupValues.size > 1) {
-            val contentInsideBlock = match.groupValues[1].trim()
+            val contentInsideBlock = match.groupValues[1].trim() // This is the content between ```html and ```
             val startIndexInBlock = contentInsideBlock.indexOf("<html>", ignoreCase = true)
             val endIndexInBlock = contentInsideBlock.lastIndexOf("</html>", ignoreCase = true)
             if (startIndexInBlock != -1 && endIndexInBlock != -1 && endIndexInBlock > startIndexInBlock) {
@@ -249,6 +248,17 @@ class MainActivity : ComponentActivity() {
         return potentialHtmlContent
     }
 
+    private fun showResetConfirmationDialog() {
+        AlertDialog.Builder(this)
+            .setTitle("Confirm Reset")
+            .setMessage("Are you sure you want to reset the game? This will clear all progress.")
+            .setPositiveButton("Reset") { dialog, _ ->
+                resetGame()
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel") { dialog, _ -> dialog.dismiss() }
+            .show()
+    }
 
     private fun updateGameHtml(newContent: String, isStreaming: Boolean = false, isDiagnosis: Boolean = false) {
         val cleanHtml = if (isStreaming) newContent else extractHtml(newContent)
@@ -272,7 +282,6 @@ class MainActivity : ComponentActivity() {
                 .action-button,button,a.action-link{background-color:#3949ab;color:#fff;padding:12px 18px;text-decoration:none;border-radius:5px;margin:5px;border:none;cursor:pointer;display:inline-block;font-size:1em}
                 a.action-link:hover,button:hover{background-color:#283593}
                 p{line-height:1.6;margin-bottom:10px}
-                .available-actions{font-style:italic;color:#555;margin-top:15px;text-align:center}
                 .further-thoughts{margin-top:25px;padding:15px;border-top:1px dashed #ccc;background-color:#e9e9e9;border-radius:5px;}
                 .further-thoughts h3{margin-top:0;color:#2c3e50;}
                 .further-thoughts p{margin-bottom:8px;color:#34495e;}
@@ -468,12 +477,11 @@ class MainActivity : ComponentActivity() {
                 "**TASK 2: GENERATE THE STARTING SCENE HTML**\n" +
                 "Then, generate **only the HTML code** for this starting scene. The HTML should include:\n" +
                 "1. A title and a description of the scene, designed to be intriguing and to subtly guide the player towards psychologically revealing choices.\n" +
-                "2. An `<img>` tag for Pollinations.ai. The `src` attribute MUST be in the format `https://image.pollinations.ai/prompt/YOUR_URL_ENCODED_PROMPT?width=368&height=448`. URL-encode the image prompt and ensure the width and height parameters are included exactly as shown. The image should be thematically relevant and visually striking.\n" +
+                "2. An `<img>` tag for Pollinations.ai. The `src` attribute MUST be in the format `https://image.pollinations.ai/prompt/YOUR_URL_ENCODED_PROMPT?width=368&height=448`. URL-encode the image prompt and ensure the width and height parameters are included exactly as shown. The image should be thematically relevant and visually striking. **Place this image tag immediately after the title and description.**\n" +
                 "3. **Main Player Choices (Turn Advancement):** Present 3-4 distinct choices for the player's first actions in the game. Each choice MUST be a clickable HTML element (e.g., `<button>` or `<a>`) with an `onclick` attribute calling `Android.performAction('ACTION_DESCRIPTION'); return false;`. These choices should be clearly grouped together. These are the main way the player interacts to change the game state.\n" +
-                "4. A list of available actions as text (e.g., 'Available actions: examine the button, look around, try the door').\n" +
-                "5. **Additional UI Elements for Reflection (Optional but encouraged for variety):** In a div with class 'further-thoughts', add 1-2 of the following HTML form elements: slider, radio group, checkbox, or text input, if contextually appropriate for initial reflections. Place this div *before* the main player choices section.\n" +
+                "4. **Additional UI Elements for Reflection (Optional but encouraged for variety):** In a div with class 'further-thoughts', add 1-2 of the following HTML form elements: slider, radio group, checkbox, or text input, if contextually appropriate for initial reflections. Place this div *before* the main player choices section.\n" +
                 "   Example: `<p>Initial feeling: <input type='radio' name='initial_feeling' value='curious'> Curious <input type='radio' name='initial_feeling' value='uneasy'> Uneasy</p>`\n" + // Example Radio Group
-                "6. Ensure well-formed, self-contained HTML with basic CSS. Remember your persona and aim to create an engaging, slightly unsettling experience from the very start."
+                "5. Ensure well-formed, self-contained HTML with basic CSS. Remember your persona and aim to create an engaging, slightly unsettling experience from the very start."
         runInference(initialPrompt, isDiagnosisRequest = false)
     }
 
@@ -796,8 +804,8 @@ fun GameScreenPreview() {
     SickoTheme {
         val exampleImageUrl = "https://image.pollinations.ai/prompt/" + URLEncoder.encode("a vibrant fantasy landscape with floating islands and dragons", StandardCharsets.UTF_8.name())
         val exampleHtml = """
-        <html><head><style>body{font-family:sans-serif;margin:10px;background-color:#f0f0f0;color:#333}h1{color:#1a237e;text-align:center}img{max-width:100%;height:auto;border-radius:8px;margin-bottom:10px;display:block;margin-left:auto;margin-right:auto;border:1px solid #ddd}.actions{margin-top:20px;text-align:center}.action-button,button{background-color:#3949ab;color:#fff;padding:10px 15px;text-decoration:none;border-radius:5px;margin:5px;border:none;cursor:pointer}p{line-height:1.6}.available-actions{font-style:italic;color:#555;margin-top:15px;text-align:center}</style></head>
-        <body><h1>The Dragon's Peak</h1><img src="$exampleImageUrl" alt="Image of a vibrant fantasy landscape" style="max-width:100%;height:auto;border-radius:8px;margin-bottom:10px;display:block;margin-left:auto;margin-right:auto"><p>You stand at the precipice of a windy cliff, overlooking a valley filled with floating islands. In the distance, a majestic dragon circles a crystalline peak.</p><div class='actions'><button onclick="Android.performAction('approach the dragon');return false">Approach Dragon</button><button onclick="Android.performAction('search for a path down');return false">Search Path</button></div><p class="available-actions">Available actions: approach the dragon, search for a path down</p>
+        <html><head><style>body{font-family:sans-serif;margin:10px;background-color:#f0f0f0;color:#333}h1{color:#1a237e;text-align:center}img{max-width:100%;height:auto;border-radius:8px;margin-bottom:10px;display:block;margin-left:auto;margin-right:auto;border:1px solid #ddd}.actions{margin-top:20px;text-align:center}.action-button,button{background-color:#3949ab;color:#fff;padding:10px 15px;text-decoration:none;border-radius:5px;margin:5px;border:none;cursor:pointer}p{line-height:1.6}</style></head>
+        <body><h1>The Dragon's Peak</h1><img src="$exampleImageUrl" alt="Image of a vibrant fantasy landscape" style="max-width:100%;height:auto;border-radius:8px;margin-bottom:10px;display:block;margin-left:auto;margin-right:auto"><p>You stand at the precipice of a windy cliff, overlooking a valley filled with floating islands. In the distance, a majestic dragon circles a crystalline peak.</p><div class='actions'><button onclick="Android.performAction('approach the dragon');return false">Approach Dragon</button><button onclick="Android.performAction('search for a path down');return false">Search Path</button></div>
         <div class="further-thoughts"><h3>Further Thoughts?</h3><p>Rate your excitement (0-10): <input type='range' name='excitement_level' min='0' max='10' value='7'></p><p>Your next move is driven by: <input type='radio' name='drive' value='curiosity' checked> Curiosity <input type='radio' name='drive' value='caution'> Caution</p></div>
         <div style="height:800px;background-color:#aabbcc">Scrollable Content Below</div></body></html>
         """.trimIndent()
